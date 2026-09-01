@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/TwitchSubscriberPictures.Core/TwitchSubscriberPictures.Core.csproj" />
+  <Project Path="src/TwitchSubscriberPictures/TwitchSubscriberPictures.csproj" />
+  <Project Path="tests/TwitchSubscriberPictures.Tests/TwitchSubscriberPictures.Tests.csproj" />
+  <Project Path="tests/TwitchSubscriberPictures.IntegrationTests/TwitchSubscriberPictures.IntegrationTests.csproj" />
+</Solution>
