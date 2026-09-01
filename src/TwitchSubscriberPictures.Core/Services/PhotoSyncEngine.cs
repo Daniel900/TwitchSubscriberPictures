@@ -45,12 +45,7 @@ public sealed class PhotoSyncEngine
     {
         var statuses = new List<SubscriberPhotoStatus>(activeSubscribers.Count);
         var errors = new List<string>();
-        var activeLogins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var subscriber in activeSubscribers)
-        {
-            activeLogins.Add(subscriber.UserLogin);
-        }
+        var activeFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         if (!Directory.Exists(allPhotosPath))
         {
@@ -75,7 +70,7 @@ public sealed class PhotoSyncEngine
         {
             try
             {
-                var source = FindSourcePhoto(allPhotosPath, subscriber.UserLogin);
+                var source = FindSourcePhoto(allPhotosPath, subscriber.UserLogin, subscriber.UserName);
                 if (source is null)
                 {
                     statuses.Add(new SubscriberPhotoStatus(
@@ -85,6 +80,7 @@ public sealed class PhotoSyncEngine
                     continue;
                 }
 
+                activeFileNames.Add(Path.GetFileNameWithoutExtension(source));
                 var destination = Path.Combine(activePhotosPath, Path.GetFileName(source));
                 File.Copy(source, destination, overwrite: true);
                 statuses.Add(new SubscriberPhotoStatus(
@@ -104,19 +100,43 @@ public sealed class PhotoSyncEngine
             }
         }
 
-        RemoveStaleActivePhotos(activePhotosPath, activeLogins, errors);
+        RemoveStaleActivePhotos(activePhotosPath, activeFileNames, errors);
         return new ReconciliationResult(statuses, errors);
     }
 
-    private string? FindSourcePhoto(string allPhotosPath, string login)
+    private string? FindSourcePhoto(string allPhotosPath, string login, string displayName)
     {
-        if (!Directory.Exists(allPhotosPath) || string.IsNullOrWhiteSpace(login))
+        var loginMatch = FindFirstMatch(allPhotosPath, login, "login");
+        if (loginMatch is not null)
+        {
+            return loginMatch;
+        }
+
+        if (string.IsNullOrWhiteSpace(displayName) || !IsSafeFileName(displayName))
+        {
+            return null;
+        }
+
+        var displayNameMatch = FindFirstMatch(allPhotosPath, displayName, "display name");
+        if (displayNameMatch is not null)
+        {
+            _logger.Log(
+                AppLogLevel.Info,
+                $"No login-name photo found for '{login}'. Using display-name fallback: {Path.GetFileName(displayNameMatch)}");
+        }
+
+        return displayNameMatch;
+    }
+
+    private string? FindFirstMatch(string allPhotosPath, string name, string matchKind)
+    {
+        if (!Directory.Exists(allPhotosPath) || string.IsNullOrWhiteSpace(name))
         {
             return null;
         }
 
         var matches = Directory
-            .EnumerateFiles(allPhotosPath, login + ".*", SearchOption.TopDirectoryOnly)
+            .EnumerateFiles(allPhotosPath, name + ".*", SearchOption.TopDirectoryOnly)
             .OrderBy(Path.GetExtension, StringComparer.OrdinalIgnoreCase)
             .ThenBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -130,15 +150,21 @@ public sealed class PhotoSyncEngine
         {
             _logger.Log(
                 AppLogLevel.Warning,
-                $"Multiple files found for subscriber '{login}'. Using first match: {Path.GetFileName(matches[0])}");
+                $"Multiple files found for {matchKind} '{name}'. Using first match: {Path.GetFileName(matches[0])}");
         }
 
         return matches[0];
     }
 
+    private static bool IsSafeFileName(string name)
+    {
+        return name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
+               name is not "." and not "..";
+    }
+
     private void RemoveStaleActivePhotos(
         string activePhotosPath,
-        IReadOnlySet<string> activeLogins,
+        IReadOnlySet<string> activeFileNames,
         ICollection<string> errors)
     {
         if (!Directory.Exists(activePhotosPath))
@@ -149,7 +175,7 @@ public sealed class PhotoSyncEngine
         foreach (var file in Directory.EnumerateFiles(activePhotosPath, "*", SearchOption.TopDirectoryOnly))
         {
             var login = Path.GetFileNameWithoutExtension(file);
-            if (string.IsNullOrWhiteSpace(login) || activeLogins.Contains(login))
+            if (string.IsNullOrWhiteSpace(login) || activeFileNames.Contains(login))
             {
                 continue;
             }

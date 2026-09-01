@@ -106,6 +106,29 @@ public sealed class PhotoSyncEngineTests
         Assert.Contains(logger.Messages, message => message.Contains("Multiple files", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ReconcileAsync_FallsBackToDisplayName_WhenLoginDoesNotMatch()
+    {
+        using var temp = new TempDirectory();
+        var all = Path.Combine(temp.Path, "AllPhotos");
+        var active = Path.Combine(temp.Path, "ActivePhotos");
+        Directory.CreateDirectory(all);
+
+        await File.WriteAllBytesAsync(Path.Combine(all, "Alice Display Name.png"), new byte[] { 1, 2, 3 });
+
+        var logger = new ListAppLogger();
+        var engine = new PhotoSyncEngine(logger);
+
+        var result = await engine.ReconcileAsync(
+            new[] { new ActiveSubscriber("1", "alice", "Alice Display Name", "1000", false) },
+            all,
+            active);
+
+        Assert.False(result.Subscribers.Single().IsMissingPhoto);
+        Assert.True(File.Exists(Path.Combine(active, "Alice Display Name.png")));
+        Assert.Contains(logger.Messages, message => message.Contains("display-name fallback", StringComparison.OrdinalIgnoreCase));
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()
