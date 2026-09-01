@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Authentication;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,7 +20,15 @@ public sealed class TwitchDeviceCodeClient : ITwitchDeviceCodeClient, IDisposabl
     public TwitchDeviceCodeClient(HttpClient? httpClient = null, Uri? baseUri = null)
     {
         _ownsHttpClient = httpClient is null;
-        _httpClient = httpClient ?? new HttpClient();
+        var handler = new SocketsHttpHandler
+        {
+            SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+            {
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+            }
+        };
+
+        _httpClient = httpClient ?? new HttpClient(handler);
 
         var rawBaseUri = (baseUri ?? new Uri("https://id.twitch.tv/oauth2/", UriKind.Absolute)).AbsoluteUri;
         if (!rawBaseUri.EndsWith("/", StringComparison.Ordinal))

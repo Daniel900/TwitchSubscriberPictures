@@ -174,11 +174,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         if (_eventSubService is not null)
         {
-            await _eventSubService.DisposeAsync();
+            await _eventSubService.DisposeAsync().ConfigureAwait(false);
             _eventSubService = null;
         }
 
-        await SaveSettingsAsync();
+        await SaveSettingsAsync().ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
@@ -189,7 +189,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         _isDisposed = true;
-        await ShutdownAsync();
+        await ShutdownAsync().ConfigureAwait(false);
     }
 
     private async Task TryStartWithStoredTokenAsync()

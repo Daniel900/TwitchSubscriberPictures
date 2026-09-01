@@ -88,40 +88,29 @@
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0"
                            Grid.Column="0"
                            VerticalAlignment="Center"
-                           Text="Client ID" />
-                <TextBox Grid.Row="0"
-                         Grid.Column="1"
-                         Grid.ColumnSpan="4"
-                         Margin="8,4"
-                         Text="{Binding TwitchClientId, UpdateSourceTrigger=PropertyChanged}" />
-
-                <TextBlock Grid.Row="1"
-                           Grid.Column="0"
-                           VerticalAlignment="Center"
                            Text="Poll interval (min)" />
-                <TextBox Grid.Row="1"
+                <TextBox Grid.Row="0"
                          Grid.Column="1"
                          Margin="8,4"
                          Text="{Binding PollIntervalMinutes, UpdateSourceTrigger=PropertyChanged}" />
-                <Button Grid.Row="1"
+                <Button Grid.Row="0"
                         Grid.Column="2"
                         Margin="4"
                         Width="110"
                         Content="Connect Twitch"
                         Command="{Binding ConnectTwitchCommand}" />
-                <Button Grid.Row="1"
+                <Button Grid.Row="0"
                         Grid.Column="3"
                         Margin="4"
                         Width="100"
                         Content="Save settings"
                         Command="{Binding SaveSettingsCommand}" />
-                <TextBlock Grid.Row="1"
+                <TextBlock Grid.Row="0"
                            Grid.Column="4"
                            VerticalAlignment="Center"
                            Margin="8,0,0,0"

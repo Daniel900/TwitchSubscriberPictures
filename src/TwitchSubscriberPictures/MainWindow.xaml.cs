@@ -41,12 +41,18 @@ public partial class MainWindow : Window
         switch (prompt.SelectedAction)
         {
             case ClosePromptAction.MinimizeToTray:
-                Hide();
+                Dispatcher.BeginInvoke(Hide);
                 break;
 
             case ClosePromptAction.Close:
                 AllowClose = true;
-                Close();
+                Dispatcher.BeginInvoke(async () =>
+                {
+                    if (Application.Current is App app)
+                    {
+                        await app.ShutdownApplicationAsync();
+                    }
+                });
                 break;
 
             default:

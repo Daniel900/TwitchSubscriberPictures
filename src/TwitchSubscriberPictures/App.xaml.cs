@@ -13,6 +13,7 @@ public partial class App : Application
     private MainViewModel? _viewModel;
     private TrayIconController? _trayIcon;
     private TwitchDeviceCodeClient? _deviceCodeClient;
+    private bool _isShuttingDown;
 
     private async void OnStartup(object sender, StartupEventArgs e)
     {
@@ -53,20 +54,38 @@ public partial class App : Application
         await _viewModel.InitializeAsync();
     }
 
-    private void OnExit(object sender, ExitEventArgs e)
+    public async Task ShutdownApplicationAsync()
     {
-        if (_viewModel is not null)
+        if (_isShuttingDown)
         {
-            _viewModel.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            return;
         }
 
+        _isShuttingDown = true;
+
+        if (_viewModel is not null)
+        {
+            await _viewModel.DisposeAsync();
+        }
+
+        _trayIcon?.Dispose();
+        _trayIcon = null;
+
+        _deviceCodeClient?.Dispose();
+        _deviceCodeClient = null;
+
+        Application.Current.Shutdown();
+    }
+
+    private void OnExit(object sender, ExitEventArgs e)
+    {
         _trayIcon?.Dispose();
         _deviceCodeClient?.Dispose();
     }
 
     private void ShowMainWindow()
     {
-        if (_mainWindow is null)
+        if (_mainWindow is null || _isShuttingDown)
         {
             return;
         }
@@ -80,14 +99,14 @@ public partial class App : Application
         _mainWindow.Activate();
     }
 
-    private void CloseFromTray()
+    private async void CloseFromTray()
     {
-        if (_mainWindow is null)
+        if (_mainWindow is null || _isShuttingDown)
         {
             return;
         }
 
         _mainWindow.AllowClose = true;
-        _mainWindow.Close();
+        await ShutdownApplicationAsync();
     }
 }
