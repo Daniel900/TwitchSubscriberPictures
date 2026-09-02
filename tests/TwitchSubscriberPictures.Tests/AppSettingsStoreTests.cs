@@ -28,7 +28,7 @@ public sealed class AppSettingsStoreTests
 
         Assert.Equal(@"C:\Photos\All", loaded.AllPhotosPath);
         Assert.Equal(@"C:\Photos\Active", loaded.ActivePhotosPath);
-        Assert.Equal("client", loaded.TwitchClientId);
+        Assert.Equal(AppSettings.DefaultTwitchClientId, loaded.TwitchClientId);
         Assert.Equal(AppSettings.MinimumPollIntervalMinutes, loaded.PollIntervalMinutes);
     }
 }

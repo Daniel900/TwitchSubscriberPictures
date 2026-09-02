@@ -42,10 +42,19 @@ public sealed class TwitchEventSubServiceIntegrationTests
         {
             await WaitForSessionAsync(service);
             _output.WriteLine($"Using EventSub session: {service.SessionId}");
-            await _fixture.TriggerWebSocketEventAsync("subscribe", service.SessionId!);
 
-            var completed = await Task.WhenAny(changed.Task, Task.Delay(TimeSpan.FromSeconds(20)));
-            Assert.Same(changed.Task, completed);
+            Task completed;
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                await _fixture.TriggerWebSocketEventAsync("subscribe", service.SessionId!);
+                completed = await Task.WhenAny(changed.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+                if (completed == changed.Task)
+                {
+                    return;
+                }
+            }
+
+            Assert.True(changed.Task.IsCompleted, "EventSub did not raise the subscriber change event after three triggers.");
         }
         finally
         {

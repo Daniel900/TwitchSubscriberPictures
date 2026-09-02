@@ -53,6 +53,8 @@ public sealed class TwitchEventSubService : IAsyncDisposable
 
     public event Func<SubscriberChangedEventArgs, Task>? SubscriberListChanged;
 
+    public event Func<string, Task>? ConnectionError;
+
     public string? SessionId => _client.SessionId;
 
     public async Task StartAsync(
@@ -198,8 +200,26 @@ public sealed class TwitchEventSubService : IAsyncDisposable
     private Task OnErrorOccurred(object? sender, ErrorOccuredArgs e)
     {
         var message = string.IsNullOrWhiteSpace(e.Message) ? e.Exception?.Message : e.Message;
-        _logger.Log(AppLogLevel.Error, $"EventSub error: {message ?? "unknown error"}");
-        return Task.CompletedTask;
+        var effectiveMessage = message ?? "unknown error";
+        _logger.Log(AppLogLevel.Error, $"EventSub error: {effectiveMessage}");
+        return RaiseConnectionErrorAsync(effectiveMessage);
+    }
+
+    private async Task RaiseConnectionErrorAsync(string message)
+    {
+        var handler = ConnectionError;
+        if (handler is null)
+        {
+            return;
+        }
+
+        foreach (var invocation in handler.GetInvocationList())
+        {
+            if (invocation is Func<string, Task> asyncInvocation)
+            {
+                await asyncInvocation(message).ConfigureAwait(false);
+            }
+        }
     }
 
     private Task OnChannelSubscribe(object? sender, ChannelSubscribeArgs e)

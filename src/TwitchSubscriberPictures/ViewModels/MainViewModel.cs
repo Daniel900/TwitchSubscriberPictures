@@ -144,7 +144,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _settings = await _settingsStore.LoadAsync();
         AllPhotosPath = _settings.AllPhotosPath;
         ActivePhotosPath = _settings.ActivePhotosPath;
-        TwitchClientId = _settings.TwitchClientId;
+        TwitchClientId = AppSettings.DefaultTwitchClientId;
         PollIntervalMinutes = _settings.PollIntervalMinutes;
 
         _logSink.Log(AppLogLevel.Info, "Settings loaded.");
@@ -345,6 +345,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             webSocketUri: _eventSubWebSocketUri,
             registerSubscriptions: _registerEventSubSubscriptions);
         _eventSubService.SubscriberListChanged += OnSubscriberListChanged;
+        _eventSubService.ConnectionError += OnEventSubConnectionError;
 
         try
         {
@@ -361,6 +362,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             SetStatus(TwitchConnectionStatus.Connected, "Connected");
             _logSink.Log(AppLogLevel.Error, $"Could not start EventSub connection: {ex.Message}");
         }
+    }
+
+    private async Task OnEventSubConnectionError(string message)
+    {
+        SetStatus(TwitchConnectionStatus.Connected, "Connected - EventSub unavailable");
+        await Task.CompletedTask;
     }
 
     private async Task OnSubscriberListChanged(SubscriberChangedEventArgs e)
