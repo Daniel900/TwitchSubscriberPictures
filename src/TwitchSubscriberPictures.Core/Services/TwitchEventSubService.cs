@@ -8,6 +8,7 @@ using TwitchLib.EventSub.Core.EventArgs.Channel;
 using TwitchLib.EventSub.Websockets;
 using TwitchLib.EventSub.Websockets.Core.EventArgs;
 using TwitchSubscriberPictures.Core.Abstractions;
+using TwitchSubscriberPictures.Core.Models;
 
 namespace TwitchSubscriberPictures.Core.Services;
 
@@ -50,7 +51,7 @@ public sealed class TwitchEventSubService : IAsyncDisposable
         _client.ChannelSubscriptionMessage += OnChannelSubscriptionMessage;
     }
 
-    public event Func<Task>? SubscriberListChanged;
+    public event Func<SubscriberChangedEventArgs, Task>? SubscriberListChanged;
 
     public string? SessionId => _client.SessionId;
 
@@ -203,29 +204,59 @@ public sealed class TwitchEventSubService : IAsyncDisposable
 
     private Task OnChannelSubscribe(object? sender, ChannelSubscribeArgs e)
     {
-        _logger.Log(AppLogLevel.Info, $"EventSub: {e.Payload.Event.UserLogin} subscribed.");
-        return RaiseSubscriberListChangedAsync();
+        var subscriber = MapSubscriber(
+            e.Payload.Event.UserId,
+            e.Payload.Event.UserLogin,
+            e.Payload.Event.UserName,
+            e.Payload.Event.Tier,
+            e.Payload.Event.IsGift);
+
+        _logger.Log(AppLogLevel.Info, $"EventSub: {subscriber.UserLogin} subscribed.");
+        return RaiseSubscriberListChangedAsync(SubscriberChangeType.Subscribed, subscriber);
     }
 
     private Task OnChannelSubscriptionEnd(object? sender, ChannelSubscriptionEndArgs e)
     {
-        _logger.Log(AppLogLevel.Info, $"EventSub: {e.Payload.Event.UserLogin} subscription ended.");
-        return RaiseSubscriberListChangedAsync();
+        var subscriber = MapSubscriber(
+            e.Payload.Event.UserId,
+            e.Payload.Event.UserLogin,
+            e.Payload.Event.UserName,
+            e.Payload.Event.Tier,
+            e.Payload.Event.IsGift);
+
+        _logger.Log(AppLogLevel.Info, $"EventSub: {subscriber.UserLogin} subscription ended.");
+        return RaiseSubscriberListChangedAsync(SubscriberChangeType.Unsubscribed, subscriber);
     }
 
     private Task OnChannelSubscriptionGift(object? sender, ChannelSubscriptionGiftArgs e)
     {
-        _logger.Log(AppLogLevel.Info, $"EventSub: {e.Payload.Event.UserLogin} gifted {e.Payload.Event.Total} subscription(s).");
-        return RaiseSubscriberListChangedAsync();
+        var subscriber = MapSubscriber(
+            e.Payload.Event.UserId,
+            e.Payload.Event.UserLogin,
+            e.Payload.Event.UserName,
+            e.Payload.Event.Tier,
+            isGift: true);
+
+        _logger.Log(AppLogLevel.Info, $"EventSub: {subscriber.UserLogin} gifted {e.Payload.Event.Total} subscription(s).");
+        return RaiseSubscriberListChangedAsync(SubscriberChangeType.Gifted, subscriber);
     }
 
     private Task OnChannelSubscriptionMessage(object? sender, ChannelSubscriptionMessageArgs e)
     {
-        _logger.Log(AppLogLevel.Info, $"EventSub: subscription message from {e.Payload.Event.UserLogin}.");
-        return RaiseSubscriberListChangedAsync();
+        var subscriber = MapSubscriber(
+            e.Payload.Event.UserId,
+            e.Payload.Event.UserLogin,
+            e.Payload.Event.UserName,
+            e.Payload.Event.Tier,
+            isGift: false);
+
+        _logger.Log(AppLogLevel.Info, $"EventSub: subscription message from {subscriber.UserLogin}.");
+        return RaiseSubscriberListChangedAsync(SubscriberChangeType.Resubscribed, subscriber);
     }
 
-    private async Task RaiseSubscriberListChangedAsync()
+    private async Task RaiseSubscriberListChangedAsync(
+        SubscriberChangeType changeType,
+        ActiveSubscriber subscriber)
     {
         var handler = SubscriberListChanged;
         if (handler is null)
@@ -235,11 +266,27 @@ public sealed class TwitchEventSubService : IAsyncDisposable
 
         foreach (var invocation in handler.GetInvocationList())
         {
-            if (invocation is Func<Task> asyncInvocation)
+            if (invocation is Func<SubscriberChangedEventArgs, Task> asyncInvocation)
             {
-                await asyncInvocation().ConfigureAwait(false);
+                await asyncInvocation(new SubscriberChangedEventArgs(changeType, subscriber))
+                    .ConfigureAwait(false);
             }
         }
+    }
+
+    private static ActiveSubscriber MapSubscriber(
+        string? userId,
+        string? userLogin,
+        string? userName,
+        string? tier,
+        bool isGift)
+    {
+        return new ActiveSubscriber(
+            userId ?? string.Empty,
+            userLogin ?? string.Empty,
+            string.IsNullOrWhiteSpace(userName) ? userLogin ?? string.Empty : userName,
+            tier ?? string.Empty,
+            isGift);
     }
 
     private void StartReconnectLoop()

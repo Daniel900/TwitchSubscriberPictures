@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TwitchSubscriberPictures.Core.Abstractions;
 using TwitchSubscriberPictures.Core.Services;
+using Xunit.Abstractions;
 
 namespace TwitchSubscriberPictures.IntegrationTests;
 
@@ -10,10 +11,12 @@ namespace TwitchSubscriberPictures.IntegrationTests;
 public sealed class TwitchEventSubServiceIntegrationTests
 {
     private readonly TwitchCliFixture _fixture;
+    private readonly ITestOutputHelper _output;
 
-    public TwitchEventSubServiceIntegrationTests(TwitchCliFixture fixture)
+    public TwitchEventSubServiceIntegrationTests(TwitchCliFixture fixture, ITestOutputHelper output)
     {
         _fixture = fixture;
+        _output = output;
     }
 
     [Fact]
@@ -26,8 +29,9 @@ public sealed class TwitchEventSubServiceIntegrationTests
             registerSubscriptions: false);
 
         var changed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        service.SubscriberListChanged += () =>
+        service.SubscriberListChanged += _ =>
         {
+            _output.WriteLine("EventSub service raised SubscriberListChanged.");
             changed.TrySetResult(true);
             return Task.CompletedTask;
         };
@@ -37,6 +41,7 @@ public sealed class TwitchEventSubServiceIntegrationTests
         try
         {
             await WaitForSessionAsync(service);
+            _output.WriteLine($"Using EventSub session: {service.SessionId}");
             await _fixture.TriggerWebSocketEventAsync("subscribe", service.SessionId!);
 
             var completed = await Task.WhenAny(changed.Task, Task.Delay(TimeSpan.FromSeconds(20)));

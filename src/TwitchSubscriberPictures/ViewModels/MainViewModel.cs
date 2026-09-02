@@ -29,8 +29,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private AppSettings _settings = new();
     private TwitchToken? _activeToken;
     private string? _broadcasterId;
+    private List<ActiveSubscriber> _activeSubscribers = new();
     private TwitchEventSubService? _eventSubService;
     private CancellationTokenSource? _pollCts;
+    private Uri? _eventSubWebSocketUri;
+    private bool _registerEventSubSubscriptions;
     private bool _isBusy;
     private bool _isDisposed;
 
@@ -50,7 +53,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         TwitchDeviceCodeAuthService deviceCodeAuthService,
         ITwitchDeviceCodeClient deviceCodeClient,
         PhotoSyncEngine photoSync,
-        UiLogSink logSink)
+        UiLogSink logSink,
+        Uri? eventSubWebSocketUri = null,
+        bool registerEventSubSubscriptions = true)
     {
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
         _tokenStore = tokenStore ?? throw new ArgumentNullException(nameof(tokenStore));
@@ -60,6 +65,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _deviceCodeClient = deviceCodeClient ?? throw new ArgumentNullException(nameof(deviceCodeClient));
         _photoSync = photoSync ?? throw new ArgumentNullException(nameof(photoSync));
         _logSink = logSink ?? throw new ArgumentNullException(nameof(logSink));
+        _eventSubWebSocketUri = eventSubWebSocketUri;
+        _registerEventSubSubscriptions = registerEventSubSubscriptions;
 
         BrowseAllPhotosCommand = new AsyncRelayCommand(BrowseAllPhotosAsync);
         BrowseActivePhotosCommand = new AsyncRelayCommand(BrowseActivePhotosAsync);
@@ -161,6 +168,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         await TryStartWithStoredTokenAsync();
+    }
+
+    public async Task InitializeMockAsync(
+        string clientId,
+        string broadcasterId,
+        TwitchToken token)
+    {
+        TwitchClientId = clientId;
+        _activeToken = token;
+        _broadcasterId = broadcasterId;
+        _logSink.Log(AppLogLevel.Info, "Starting in Twitch CLI mock API mode.");
+        await StartConnectedAsync();
     }
 
     public async Task ShutdownAsync()
@@ -320,7 +339,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        _eventSubService = new TwitchEventSubService(_apiFactory, _logSink);
+        _eventSubService = new TwitchEventSubService(
+            _apiFactory,
+            _logSink,
+            webSocketUri: _eventSubWebSocketUri,
+            registerSubscriptions: _registerEventSubSubscriptions);
         _eventSubService.SubscriberListChanged += OnSubscriberListChanged;
 
         try
@@ -340,9 +363,57 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task OnSubscriberListChanged()
+    private async Task OnSubscriberListChanged(SubscriberChangedEventArgs e)
     {
-        await RunReconciliationAsync();
+        switch (e.ChangeType)
+        {
+            case SubscriberChangeType.Subscribed:
+            case SubscriberChangeType.Resubscribed:
+                UpsertActiveSubscriber(e.Subscriber);
+                await RunFileSyncAsync();
+                break;
+
+            case SubscriberChangeType.Unsubscribed:
+                RemoveActiveSubscriber(e.Subscriber);
+                await RunFileSyncAsync();
+                break;
+
+            case SubscriberChangeType.Gifted:
+                // A channel.subscription.gift event identifies the gifter but not
+                // the individual recipients, so a full Helix refresh is required here.
+                await RunReconciliationAsync();
+                break;
+        }
+    }
+
+    private void UpsertActiveSubscriber(ActiveSubscriber subscriber)
+    {
+        var existingIndex = _activeSubscribers.FindIndex(existing =>
+            string.Equals(existing.UserId, subscriber.UserId, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(existing.UserId));
+
+        if (existingIndex < 0)
+        {
+            existingIndex = _activeSubscribers.FindIndex(existing =>
+                string.Equals(existing.UserLogin, subscriber.UserLogin, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (existingIndex >= 0)
+        {
+            _activeSubscribers[existingIndex] = subscriber;
+        }
+        else
+        {
+            _activeSubscribers.Add(subscriber);
+        }
+    }
+
+    private void RemoveActiveSubscriber(ActiveSubscriber subscriber)
+    {
+        _activeSubscribers.RemoveAll(existing =>
+            string.Equals(existing.UserId, subscriber.UserId, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(existing.UserId) ||
+            string.Equals(existing.UserLogin, subscriber.UserLogin, StringComparison.OrdinalIgnoreCase));
     }
 
     private void StartPollLoop()
@@ -406,15 +477,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 _activeToken.AccessToken,
                 _broadcasterId);
 
-            var result = await _photoSync.ReconcileAsync(subscribers, AllPhotosPath, ActivePhotosPath);
-
-            UpdateSubscribers(result.Subscribers);
-            _logSink.Log(AppLogLevel.Info, $"Reconciliation complete: {subscribers.Count} active subscriber(s).");
-
-            foreach (var error in result.Errors)
-            {
-                _logSink.Log(AppLogLevel.Error, error);
-            }
+            _activeSubscribers = subscribers.ToList();
+            await SyncActiveSubscribersAsync(_activeSubscribers);
         }
         catch (Exception ex)
         {
@@ -423,6 +487,49 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    private async Task RunFileSyncAsync()
+    {
+        if (_isBusy)
+        {
+            _logSink.Log(AppLogLevel.Info, "File sync is already running.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(AllPhotosPath) || string.IsNullOrWhiteSpace(ActivePhotosPath))
+        {
+            _logSink.Log(AppLogLevel.Error, "Both AllPhotos and ActivePhotos folders must be selected.");
+            return;
+        }
+
+        IsBusy = true;
+
+        try
+        {
+            await SyncActiveSubscribersAsync(_activeSubscribers);
+        }
+        catch (Exception ex)
+        {
+            _logSink.Log(AppLogLevel.Error, $"File sync failed: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task SyncActiveSubscribersAsync(IReadOnlyCollection<ActiveSubscriber> subscribers)
+    {
+        var result = await _photoSync.ReconcileAsync(subscribers, AllPhotosPath, ActivePhotosPath);
+
+        UpdateSubscribers(result.Subscribers);
+        _logSink.Log(AppLogLevel.Info, $"Photo sync complete: {subscribers.Count} active subscriber(s).");
+
+        foreach (var error in result.Errors)
+        {
+            _logSink.Log(AppLogLevel.Error, error);
         }
     }
 
@@ -450,6 +557,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             AllPhotosPath = dialog.FolderName;
             await SaveSettingsAsync();
+            await TryRunImmediateSyncAsync();
         }
     }
 
@@ -465,7 +573,21 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             ActivePhotosPath = dialog.FolderName;
             await SaveSettingsAsync();
+            await TryRunImmediateSyncAsync();
         }
+    }
+
+    private async Task TryRunImmediateSyncAsync()
+    {
+        if (string.IsNullOrWhiteSpace(AllPhotosPath) ||
+            string.IsNullOrWhiteSpace(ActivePhotosPath) ||
+            _activeToken is null ||
+            string.IsNullOrWhiteSpace(_broadcasterId))
+        {
+            return;
+        }
+
+        await RunReconciliationAsync();
     }
 
     private static string GetInitialDirectory(string currentPath)

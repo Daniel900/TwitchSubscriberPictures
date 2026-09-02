@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using System.Windows;
+using TwitchSubscriberPictures.Core.Models;
 using TwitchSubscriberPictures.Core.Storage;
 using TwitchSubscriberPictures.Core.Services;
 using TwitchSubscriberPictures.ViewModels;
@@ -20,7 +21,19 @@ public partial class App : Application
         var logSink = new UiLogSink();
         var settingsStore = new AppSettingsStore();
         var tokenStore = new TokenFileStore(new DpapiTokenProtector());
-        var apiFactory = new TwitchApiFactory();
+
+        var mockApiBaseUrl = Environment.GetEnvironmentVariable("TSP_MOCK_API_BASE_URL");
+        var mockAccessToken = Environment.GetEnvironmentVariable("TSP_MOCK_ACCESS_TOKEN");
+        var mockBroadcasterId = Environment.GetEnvironmentVariable("TSP_MOCK_BROADCASTER_ID");
+        var isMockMode =
+            !string.IsNullOrWhiteSpace(mockApiBaseUrl) &&
+            !string.IsNullOrWhiteSpace(mockAccessToken) &&
+            !string.IsNullOrWhiteSpace(mockBroadcasterId);
+
+        var apiFactory = isMockMode
+            ? new TwitchApiFactory(new MockApiHttpCallHandler(mockApiBaseUrl!))
+            : new TwitchApiFactory();
+
         var subscriberClient = new TwitchSubscriberClient(apiFactory, logSink);
         _deviceCodeClient = new TwitchDeviceCodeClient();
         var deviceCodeAuthService = new TwitchDeviceCodeAuthService(
@@ -28,6 +41,13 @@ public partial class App : Application
             new DefaultBrowserOpener(),
             logSink);
         var photoSync = new PhotoSyncEngine(logSink);
+
+        Uri? mockWebSocketUri = null;
+        var mockWebSocketUrl = Environment.GetEnvironmentVariable("TSP_MOCK_WEBSOCKET_URL");
+        if (isMockMode && Uri.TryCreate(mockWebSocketUrl, UriKind.Absolute, out var parsedWebSocketUri))
+        {
+            mockWebSocketUri = parsedWebSocketUri;
+        }
 
         _viewModel = new MainViewModel(
             settingsStore,
@@ -37,7 +57,9 @@ public partial class App : Application
             deviceCodeAuthService,
             _deviceCodeClient,
             photoSync,
-            logSink);
+            logSink,
+            eventSubWebSocketUri: mockWebSocketUri,
+            registerEventSubSubscriptions: !isMockMode);
 
         _viewModel.ConnectionStateChanged += status => _trayIcon?.SetStatus(status);
 
@@ -51,7 +73,22 @@ public partial class App : Application
         _trayIcon.SetStatus(_viewModel.ConnectionState);
 
         _mainWindow.Show();
-        await _viewModel.InitializeAsync();
+
+        if (isMockMode)
+        {
+            var mockClientId = Environment.GetEnvironmentVariable("TSP_MOCK_CLIENT_ID") ?? "mock-client-id";
+            var mockToken = new TwitchToken(
+                mockAccessToken!,
+                string.Empty,
+                DateTimeOffset.UtcNow.AddHours(24),
+                new[] { TwitchOAuthConstants.RequiredScope });
+
+            await _viewModel.InitializeMockAsync(mockClientId, mockBroadcasterId!, mockToken);
+        }
+        else
+        {
+            await _viewModel.InitializeAsync();
+        }
     }
 
     public async Task ShutdownApplicationAsync()
