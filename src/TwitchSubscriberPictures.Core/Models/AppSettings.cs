@@ -6,7 +6,7 @@ public sealed class AppSettings
 {
     public const int DefaultPollIntervalMinutes = 15;
     public const int MinimumPollIntervalMinutes = 10;
-    public const string DefaultTwitchClientId = "h0qx0mz94bss0sdvdk6objq03jbb3j";
+    public const string DefaultTwitchClientId = "83wfn4pd4j8qwkeip5i9bchphefdpj";
 
     public string AllPhotosPath { get; set; } = string.Empty;
 
@@ -20,12 +20,7 @@ public sealed class AppSettings
     {
         AllPhotosPath = AllPhotosPath?.Trim() ?? string.Empty;
         ActivePhotosPath = ActivePhotosPath?.Trim() ?? string.Empty;
-        TwitchClientId = TwitchClientId?.Trim() ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(TwitchClientId))
-        {
-            TwitchClientId = DefaultTwitchClientId;
-        }
+        TwitchClientId = DefaultTwitchClientId;
         if (PollIntervalMinutes < MinimumPollIntervalMinutes)
         {
             PollIntervalMinutes = MinimumPollIntervalMinutes;
