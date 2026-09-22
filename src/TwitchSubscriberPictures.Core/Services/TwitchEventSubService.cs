@@ -14,11 +14,14 @@ namespace TwitchSubscriberPictures.Core.Services;
 
 public sealed class TwitchEventSubService : IAsyncDisposable
 {
+    private const int MaxConnectAttempts = 4;
+
     private readonly ITwitchApiFactory _apiFactory;
     private readonly IAppLogger _logger;
     private readonly EventSubWebsocketClient _client;
     private readonly bool _registerSubscriptions;
     private readonly Uri? _webSocketUri;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     private CancellationTokenSource _stopCts = new();
     private bool _reconnectLoopRunning;
@@ -33,12 +36,14 @@ public sealed class TwitchEventSubService : IAsyncDisposable
         IAppLogger logger,
         EventSubWebsocketClient? client = null,
         Uri? webSocketUri = null,
-        bool registerSubscriptions = true)
+        bool registerSubscriptions = true,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _apiFactory = apiFactory ?? throw new ArgumentNullException(nameof(apiFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _webSocketUri = webSocketUri;
         _registerSubscriptions = registerSubscriptions;
+        _delay = delay ?? Task.Delay;
         _client = client ?? new EventSubWebsocketClient(NullLoggerFactory.Instance);
 
         _client.WebsocketConnected += OnWebsocketConnected;
@@ -78,14 +83,70 @@ public sealed class TwitchEventSubService : IAsyncDisposable
 
         _logger.Log(AppLogLevel.Info, "Connecting to Twitch EventSub WebSocket.");
 
-        if (_webSocketUri is null)
+        await ConnectWithRetryAsync().ConfigureAwait(false);
+    }
+
+    private async Task ConnectWithRetryAsync()
+    {
+        Exception? lastFailure = null;
+
+        for (var attempt = 1; attempt <= MaxConnectAttempts; attempt++)
         {
-            await _client.ConnectAsync().ConfigureAwait(false);
+            var connected = false;
+
+            try
+            {
+                connected = _webSocketUri is null
+                    ? await _client.ConnectAsync().ConfigureAwait(false)
+                    : await _client.ConnectAsync(_webSocketUri).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (!NetworkFailure.IsTransient(ex))
+                {
+                    throw;
+                }
+
+                lastFailure = ex;
+            }
+
+            if (connected)
+            {
+                if (attempt > 1)
+                {
+                    _logger.Log(AppLogLevel.Info, $"EventSub WebSocket connected on attempt {attempt}.");
+                }
+
+                return;
+            }
+
+            if (attempt == MaxConnectAttempts)
+            {
+                break;
+            }
+
+            var delay = TimeSpan.FromSeconds(attempt);
+            var detail = lastFailure is null
+                ? string.Empty
+                : $" ({NetworkFailure.Describe(lastFailure)})";
+
+            // TwitchLib reports a failed websocket handshake by returning false
+            // (and raising ErrorOccurred) rather than by throwing, so the result
+            // has to be checked explicitly to make the retry actually happen.
+            _logger.Log(
+                AppLogLevel.Warning,
+                $"EventSub connection attempt {attempt}/{MaxConnectAttempts} failed{detail}. " +
+                $"Retrying in {delay.TotalSeconds:0} s.");
+
+            await _delay(delay, _stopCts.Token).ConfigureAwait(false);
         }
-        else
-        {
-            await _client.ConnectAsync(_webSocketUri).ConfigureAwait(false);
-        }
+
+        throw new InvalidOperationException(
+            lastFailure is null
+                ? $"The EventSub WebSocket connection failed after {MaxConnectAttempts} attempts."
+                : $"The EventSub WebSocket connection failed after {MaxConnectAttempts} attempts: " +
+                  NetworkFailure.Describe(lastFailure),
+            lastFailure);
     }
 
     public async Task StopAsync()
@@ -199,7 +260,9 @@ public sealed class TwitchEventSubService : IAsyncDisposable
 
     private Task OnErrorOccurred(object? sender, ErrorOccuredArgs e)
     {
-        var message = string.IsNullOrWhiteSpace(e.Message) ? e.Exception?.Message : e.Message;
+        var message = e.Exception is not null
+            ? NetworkFailure.Describe(e.Exception)
+            : string.IsNullOrWhiteSpace(e.Message) ? null : e.Message;
         var effectiveMessage = message ?? "unknown error";
         _logger.Log(AppLogLevel.Error, $"EventSub error: {effectiveMessage}");
         return RaiseConnectionErrorAsync(effectiveMessage);
@@ -341,7 +404,9 @@ public sealed class TwitchEventSubService : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.Log(AppLogLevel.Warning, $"EventSub reconnect attempt {attempt} failed: {ex.Message}");
+                _logger.Log(
+                    AppLogLevel.Warning,
+                    $"EventSub reconnect attempt {attempt} failed: {NetworkFailure.Describe(ex)}");
             }
 
             try

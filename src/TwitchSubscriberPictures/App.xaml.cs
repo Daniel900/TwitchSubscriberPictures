@@ -32,10 +32,10 @@ public partial class App : Application
 
         var apiFactory = isMockMode
             ? new TwitchApiFactory(new MockApiHttpCallHandler(mockApiBaseUrl!))
-            : new TwitchApiFactory();
+            : new TwitchApiFactory(logger: logSink);
 
         var subscriberClient = new TwitchSubscriberClient(apiFactory, logSink);
-        _deviceCodeClient = new TwitchDeviceCodeClient();
+        _deviceCodeClient = new TwitchDeviceCodeClient(logger: logSink);
         var deviceCodeAuthService = new TwitchDeviceCodeAuthService(
             _deviceCodeClient,
             new DefaultBrowserOpener(),

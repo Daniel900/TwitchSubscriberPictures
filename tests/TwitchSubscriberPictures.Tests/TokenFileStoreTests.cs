@@ -61,6 +61,41 @@ public sealed class TokenFileStoreTests
         Assert.Null(await store.LoadAsync());
     }
 
+    [Fact]
+    public async Task LoadAsync_ReturnsNull_WhenFileIsEmpty()
+    {
+        var file = GetTempFile();
+        await File.WriteAllBytesAsync(file, Array.Empty<byte>());
+
+        var store = new TokenFileStore(new FakeTokenProtector(), file);
+
+        Assert.Null(await store.LoadAsync());
+    }
+
+    [Fact]
+    public async Task LoadAsync_ReturnsNull_WhenFileIsCorrupt()
+    {
+        var file = GetTempFile();
+        await File.WriteAllTextAsync(file, "not a protected payload");
+
+        var store = new TokenFileStore(new FakeTokenProtector(), file);
+
+        Assert.Null(await store.LoadAsync());
+    }
+
+    [Fact]
+    public async Task SaveAsync_LeavesNoTemporaryFiles()
+    {
+        var file = GetTempFile();
+        var store = new TokenFileStore(new FakeTokenProtector(), file);
+
+        await store.SaveAsync(new TwitchToken("a", "r", DateTimeOffset.UtcNow.AddHours(1), Array.Empty<string>()));
+
+        var files = Directory.GetFiles(Path.GetDirectoryName(file)!);
+        Assert.Single(files);
+        Assert.Equal(file, files[0]);
+    }
+
     private static string GetTempFile()
     {
         var directory = Path.Combine(Path.GetTempPath(), "tsp-tests", Guid.NewGuid().ToString("N"));

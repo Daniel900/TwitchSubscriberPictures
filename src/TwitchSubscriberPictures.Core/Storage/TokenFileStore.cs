@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -47,22 +48,62 @@ public sealed class TokenFileStore : ITokenStore
             return null;
         }
 
-        var encrypted = await File.ReadAllBytesAsync(_filePath, cancellationToken).ConfigureAwait(false);
-        var decrypted = _protector.Unprotect(encrypted);
-        var json = Encoding.UTF8.GetString(decrypted);
-        return JsonSerializer.Deserialize<TwitchToken>(json, SerializerOptions);
+        try
+        {
+            var encrypted = await File.ReadAllBytesAsync(_filePath, cancellationToken).ConfigureAwait(false);
+            if (encrypted.Length == 0)
+            {
+                return null;
+            }
+
+            var decrypted = _protector.Unprotect(encrypted);
+            var json = Encoding.UTF8.GetString(decrypted);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return null;
+            }
+
+            return JsonSerializer.Deserialize<TwitchToken>(json, SerializerOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or CryptographicException or InvalidOperationException)
+        {
+            // A damaged token file must not block startup; the app simply runs
+            // the device-code flow again and overwrites it.
+            return null;
+        }
     }
 
     public async Task SaveAsync(TwitchToken token, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(token);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+        var directory = Path.GetDirectoryName(_filePath)!;
+        Directory.CreateDirectory(directory);
+
         var json = JsonSerializer.Serialize(token, SerializerOptions);
         var plaintext = Encoding.UTF8.GetBytes(json);
         var encrypted = _protector.Protect(plaintext);
+        var tempPath = Path.Combine(directory, $"{Path.GetFileName(_filePath)}.{Guid.NewGuid():N}.tmp");
 
-        await File.WriteAllBytesAsync(_filePath, encrypted, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await File.WriteAllBytesAsync(tempPath, encrypted, cancellationToken).ConfigureAwait(false);
+            File.Move(tempPath, _filePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Cleanup is best effort.
+                }
+            }
+        }
     }
 
     public Task DeleteAsync(CancellationToken cancellationToken = default)

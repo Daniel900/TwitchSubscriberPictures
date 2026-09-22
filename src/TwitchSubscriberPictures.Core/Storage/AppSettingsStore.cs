@@ -39,9 +39,24 @@ public sealed class AppSettingsStore
         }
 
         var json = await File.ReadAllTextAsync(_filePath, cancellationToken).ConfigureAwait(false);
-        var settings = JsonSerializer.Deserialize<AppSettings>(json, SerializerOptions) ?? new AppSettings();
-        settings.Normalize();
-        return settings;
+
+        // An interrupted or externally truncated save can leave an empty file
+        // behind. That is "no settings yet", not a reason to fail startup.
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return new AppSettings();
+        }
+
+        try
+        {
+            var settings = JsonSerializer.Deserialize<AppSettings>(json, SerializerOptions) ?? new AppSettings();
+            settings.Normalize();
+            return settings;
+        }
+        catch (JsonException)
+        {
+            return new AppSettings();
+        }
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
@@ -49,8 +64,32 @@ public sealed class AppSettingsStore
         ArgumentNullException.ThrowIfNull(settings);
         settings.Normalize();
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+        var directory = Path.GetDirectoryName(_filePath)!;
+        Directory.CreateDirectory(directory);
+
         var json = JsonSerializer.Serialize(settings, SerializerOptions);
-        await File.WriteAllTextAsync(_filePath, json, cancellationToken).ConfigureAwait(false);
+        var tempPath = Path.Combine(directory, $"{Path.GetFileName(_filePath)}.{Guid.NewGuid():N}.tmp");
+
+        // Write next to the target and swap the file in one step, so a crash
+        // during the write can never leave an empty or half-written settings file.
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
+            File.Move(tempPath, _filePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // Cleanup is best effort.
+                }
+            }
+        }
     }
 }

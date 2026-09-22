@@ -267,7 +267,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logSink.Log(AppLogLevel.Error, $"Could not start with stored Twitch token: {ex.Message}");
+            if (NetworkFailure.IsTransient(ex))
+            {
+                _logSink.Log(
+                    AppLogLevel.Error,
+                    $"Could not connect to Twitch on startup: {NetworkFailure.Describe(ex)}");
+                SetStatus(TwitchConnectionStatus.Disconnected, "No connection to Twitch");
+                return;
+            }
+
+            _logSink.Log(
+                AppLogLevel.Error,
+                $"Could not start with stored Twitch token: {NetworkFailure.Describe(ex)}");
             SetStatus(TwitchConnectionStatus.TokenInvalid, "Token invalid");
         }
     }
@@ -309,7 +320,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         catch (Exception ex)
         {
             SetStatus(TwitchConnectionStatus.TokenInvalid, "Token invalid");
-            _logSink.Log(AppLogLevel.Error, $"Twitch authorization failed: {ex.Message}");
+            _logSink.Log(AppLogLevel.Error, $"Twitch authorization failed: {NetworkFailure.Describe(ex)}");
         }
     }
 
@@ -360,7 +371,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         catch (Exception ex)
         {
             SetStatus(TwitchConnectionStatus.Connected, "Connected");
-            _logSink.Log(AppLogLevel.Error, $"Could not start EventSub connection: {ex.Message}");
+            _logSink.Log(AppLogLevel.Error, $"Could not start EventSub connection: {NetworkFailure.Describe(ex)}");
         }
     }
 
@@ -489,7 +500,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logSink.Log(AppLogLevel.Error, $"Reconciliation failed: {ex.Message}");
+            _logSink.Log(AppLogLevel.Error, $"Reconciliation failed: {NetworkFailure.Describe(ex)}");
         }
         finally
         {
@@ -519,7 +530,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logSink.Log(AppLogLevel.Error, $"File sync failed: {ex.Message}");
+            _logSink.Log(AppLogLevel.Error, $"File sync failed: {NetworkFailure.Describe(ex)}");
         }
         finally
         {

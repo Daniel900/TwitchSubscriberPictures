@@ -12,14 +12,19 @@ namespace TwitchSubscriberPictures.Core.Services;
 
 public sealed class TwitchDeviceCodeClient : ITwitchDeviceCodeClient, IDisposable
 {
+    private const int MaxSendAttempts = 3;
+    private static readonly TimeSpan RetryBaseDelay = TimeSpan.FromMilliseconds(400);
+
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly Uri _baseUri;
+    private readonly IAppLogger _logger;
 
-    public TwitchDeviceCodeClient(HttpClient? httpClient = null, Uri? baseUri = null)
+    public TwitchDeviceCodeClient(HttpClient? httpClient = null, Uri? baseUri = null, IAppLogger? logger = null)
     {
         _ownsHttpClient = httpClient is null;
         _httpClient = httpClient ?? new HttpClient();
+        _logger = logger ?? NullAppLogger.Instance;
 
         var rawBaseUri = (baseUri ?? new Uri("https://id.twitch.tv/oauth2/", UriKind.Absolute)).AbsoluteUri;
         if (!rawBaseUri.EndsWith("/", StringComparison.Ordinal))
@@ -35,18 +40,19 @@ public sealed class TwitchDeviceCodeClient : ITwitchDeviceCodeClient, IDisposabl
         string scope,
         CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            new Uri(_baseUri, "device"))
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        using var response = await SendWithRetryAsync(
+            () => new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(_baseUri, "device"))
             {
-                ["client_id"] = clientId,
-                ["scopes"] = scope
-            })
-        };
+                Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["client_id"] = clientId,
+                    ["scopes"] = scope
+                })
+            },
+            cancellationToken).ConfigureAwait(false);
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
@@ -71,20 +77,21 @@ public sealed class TwitchDeviceCodeClient : ITwitchDeviceCodeClient, IDisposabl
         string deviceCode,
         CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            new Uri(_baseUri, "token"))
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        using var response = await SendWithRetryAsync(
+            () => new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(_baseUri, "token"))
             {
-                ["client_id"] = clientId,
-                ["scopes"] = scope,
-                ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code",
-                ["device_code"] = deviceCode
-            })
-        };
+                Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["client_id"] = clientId,
+                    ["scopes"] = scope,
+                    ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code",
+                    ["device_code"] = deviceCode
+                })
+            },
+            cancellationToken).ConfigureAwait(false);
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (response.IsSuccessStatusCode)
@@ -118,19 +125,20 @@ public sealed class TwitchDeviceCodeClient : ITwitchDeviceCodeClient, IDisposabl
             return null;
         }
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            new Uri(_baseUri, "token"))
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        using var response = await SendWithRetryAsync(
+            () => new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(_baseUri, "token"))
             {
-                ["client_id"] = clientId,
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = refreshToken
-            })
-        };
+                Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["client_id"] = clientId,
+                    ["grant_type"] = "refresh_token",
+                    ["refresh_token"] = refreshToken
+                })
+            },
+            cancellationToken).ConfigureAwait(false);
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
@@ -139,6 +147,37 @@ public sealed class TwitchDeviceCodeClient : ITwitchDeviceCodeClient, IDisposabl
         }
 
         return ParseToken(json);
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<HttpRequestMessage> requestFactory,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var request = requestFactory();
+
+            try
+            {
+                return await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                attempt < MaxSendAttempts &&
+                !cancellationToken.IsCancellationRequested &&
+                NetworkFailure.IsTransient(ex))
+            {
+                var delay = TimeSpan.FromMilliseconds(
+                    RetryBaseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1));
+
+                _logger.Log(
+                    AppLogLevel.Warning,
+                    $"Twitch OAuth request failed on attempt {attempt}/{MaxSendAttempts} " +
+                    $"({NetworkFailure.Describe(ex)}). Retrying in {delay.TotalMilliseconds:0} ms.");
+
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     private static TwitchToken ParseToken(string json)
